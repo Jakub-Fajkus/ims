@@ -1,139 +1,88 @@
-#include <iostream>
 
 #include <simlib.h>
 
-const int Sanitek = 2;
+#define T_PM 10
+#define T_BUFFER 12
+#define C_SHEET_METAL_PALET 45
 
-Facility Sanitka[Sanitek];
-Queue	cekani("Cekani na sanitku");	// bude jedna fronta pro vsechny sanitky
+Queue pmQueue("pmQueue");
+Facility pm("Punching machine", pmQueue);
 
-Histogram hist("Doba stravena v systemu", 0, 5, 7);
+Queue pmBufferQueue("pmBufferQueue");
+Facility pmBuffer("pmBuffer", pmBufferQueue);
 
-class    Pacient : public Process {
-public:
-    Pacient(int pri) : Process(pri) {} ;
+Queue pmLoadingBufferQueue("pmLoadingBufferQueue");
+Facility pmLoadingBuffer("pmLoadingBuffer", pmLoadingBufferQueue);
 
-    void    Behavior() {
-        double time = Time;
+Store processedSheetMetalCounter("Sheet metal counter", C_SHEET_METAL_PALET);
 
-        int san;
 
-        opak:
+Queue emptyPalletQueue("emptyPalletQueue");
 
-        san=-1; prerusen=0;
-
-        // hleda volnou sanitku
-        for (int a=0; a<Sanitek; a++)
-            if (!Sanitka[a].Busy())
-                san=a;
-
-        if (san!=-1)
-            Seize(Sanitka[san]); // nasel a bere ji
-        else {
-            // nenasel, uklada se do fronty
-            cekani.Insert(this);
-            Passivate();
-
-            goto opak; // nekdo ho aktivuje, proces se tu vynori a skoci na zacatek
-        }
-
-        Wait(Uniform(1,5));
-        if (prerusen) goto opak; // jestli byl prerusen, opakuje
-
-        Wait(Exponential(1)); // nakladani pacienta
-        if (prerusen) goto opak;
-
-        Wait(Uniform(1,5));
-        if (prerusen) goto opak;
-
-        Release(Sanitka[san]);
-        /*
-            Release by mel vytahnout z fronty Q1 proces a ten dat do obsluhy. Q1 se ale nepouziva (a proto
-            je ve statistikach prazdna).
-            Aktivni proces delajici release "rucne" vytahne dalsiho z fronty a aktivuje ho.
-            Aktivovany se okamzite spusti (naplanuje se na cas Time) a pokracuje v miste, kde se
-            pasivoval
-        */
-        if (cekani.Length()>0) {
-            (cekani.GetFirst())->Activate();
-        }
-
-        hist(Time-time);
+class EmptyPallet : public Process {
+    void Behavior() {
+        //todo: paleta nekam jde
+        emptyPalletQueue.Insert(this);
     }
+};
 
-    int prerusen;
+class MetalSheet : public Process {
+    void Behavior() {
+        //zabereme loading buffer
+        this->Seize(pmLoadingBuffer);
+        this->Release(pmLoadingBuffer);
+
+        //vlozime plech do counteru
+        processedSheetMetalCounter.Leave(1);
+
+        //zabereme PM
+        this->Seize(pm);
+        this->Wait(Exponential(T_PM));
+        this->Release(pm);
+    }
 };
 
 
+class SheetMetalPallet : public Process {
+    int count;
 
-class   Generator : public Event {
 public:
-    Generator(double interv, int pri) : Event() {
-        Interval = interv;
-        Pri = pri;
-    };
+    SheetMetalPallet(Priority_t p, int count) : Process(p), count(count) {}
 
-    void    Behavior() {
-        (new Pacient(Pri))->Activate();
-        Activate(Time+Exponential(Interval));
-    }
-
-    double  Interval;
-    int     Pri;
-} ;
-
-
-class	Oprava : public Process {
-public:
-    // porucha se vztahuje na sanitku c. San
-    Oprava(int san) : Process() , San(san) {};
-
+private:
     void Behavior() {
-        Seize(Sanitka[San], 1); // zabrani sanitky s vyssi prioritou obsluhy (porucha)
+        this->Seize(pmBuffer);
 
-        // pokud nebyl pred tim nikdo v obsluze, je Q2 prazdna!!, jinak:
-        if (Sanitka[San].Q2->Length()>0) {
-            // se z ni vyjme process
-            Pacient *pac = (Pacient *)Sanitka[San].Q2->GetFirst();
-            // nastavi se mu atribut "prerusen"
-            pac->prerusen=1;
-            // a aktivuje se....
-            pac->Activate();
-
-            /* proces "pac" byl pred tim naplanovan v kalendari (volal Wait(...)). Jeho odstaveni
-            do fronty Q2 znamena, ze se zrusi jeho plan v kalendari a proces se pasivuje (neni mozno odhadnout,
-            kdy se uvolni zarizeni a znovu se mu preda obsluha. Proto je vyrazen z kalendare, kde jsou
-            naplanovany konkretni doby
-            */
+        for (int i = 0; i < this->count; ++i) {
+            (new MetalSheet())->Activate();
         }
 
-        Wait(Exponential(10)); // probiha oprava
-        Release(Sanitka[San]);
+        //pockame, nez se zpracuji vsechny plechy
+        processedSheetMetalCounter.Enter(this, C_SHEET_METAL_PALET);
 
+        (new EmptyPallet())->Activate();
+        this->Release(pmBuffer);
     }
-
-    int San;
-} ;
+};
 
 
-// udalost vyvolani poruchy
-class	Porucha : public Event {
+class SheetMetalPalletGenerator : public Event {
 public:
-    Porucha(int san) : Event() , San(san) {};
+    double Interval;
+
+    SheetMetalPalletGenerator(double interv) : Event() {
+        Interval = interv;
+    };
 
     void Behavior() {
-        // porucha je tvorena nekolika kroky v case a musi proto byt implementovana procesem
-        (new Oprava(San))->Activate();
-        Activate(Time+Exponential(700));
+        (new SheetMetalPallet(DEFAULT_PRIORITY, C_SHEET_METAL_PALET))->Activate();
+        Activate(Time + Exponential(Interval));
     }
-
-    int San;
-} ;
+};
 
 
-int     main()
-{
-    SetOutput("sanitka.dat");
+int main() {
+    SetOutput("main.dat");
     int a;
 
     //for (a=0; a<Sanitek; a++)
@@ -141,17 +90,20 @@ int     main()
 
     Init(0, 1000);
 
-    (new Generator(8,0))->Activate();
-
-    // prvni porucha se naplanuje az na cas exp(700)
-    for (a=0; a<Sanitek; a++)
-        (new Porucha(a))->Activate(Exponential(700));
+    (new SheetMetalPalletGenerator(12))->Activate();
 
     Run();
 
-    cekani.Output();
-    hist.Output();
+//    cekani.Output();
+    pm.Output();
+    pmQueue.Output();
 
-    for (a=0; a<Sanitek; a++)
-        Sanitka[a].Output();
+    pmBuffer.Output();
+    pmBufferQueue.Output();
+
+    pmLoadingBuffer.Output();
+    pmLoadingBufferQueue.Output();
+
+    processedSheetMetalCounter.Output();
+    emptyPalletQueue.Output();
 }
