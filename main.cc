@@ -4,7 +4,7 @@
 #define T_PM 10
 #define T_BUFFER 12
 #define T_METAL_SHEET_GENERATOR 300
-#define C_SHEET_METAL_PALET 45
+#define C_SHEET_METAL_PALET 10
 
 Queue pmQueue("pmQueue");
 Facility pm("Punching machine", pmQueue);
@@ -35,7 +35,7 @@ class MetalSheet : public Process {
         this->Seize(pmLoadingBuffer);
         this->Seize(pmPreWorker);
         //cas nakladani do PM
-        this->Wait(Exponential(T_BUFFER));
+        this->Wait(T_BUFFER);
         this->Release(pmLoadingBuffer);
 
         //zabereme PM
@@ -46,7 +46,7 @@ class MetalSheet : public Process {
 
         //uvonime pre workera
         this->Release(pmPreWorker);
-        this->Wait(Exponential(T_PM));
+        this->Wait(T_PM);
         this->Release(pm);
     }
 };
@@ -108,9 +108,6 @@ public:
 int main() {
     SetOutput("main.dat");
     int a;
-
-    //for (a=0; a<Sanitek; a++)
-    //	Sanitka[a].SetQueue(&cekani);
 
     Init(0, 10000);
 
