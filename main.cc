@@ -3,6 +3,7 @@
 
 #define T_PM 10
 #define T_BUFFER 12
+#define T_METAL_SHEET_GENERATOR 300
 #define C_SHEET_METAL_PALET 45
 
 Queue pmQueue("pmQueue");
@@ -14,8 +15,10 @@ Facility pmBuffer("pmBuffer", pmBufferQueue);
 Queue pmLoadingBufferQueue("pmLoadingBufferQueue");
 Facility pmLoadingBuffer("pmLoadingBuffer", pmLoadingBufferQueue);
 
-Store processedSheetMetalCounter("Sheet metal counter", C_SHEET_METAL_PALET);
+Queue pmPreQueue("pmPreQueue");
+Facility pmPreWorker("pmPreWorker", pmPreQueue);
 
+Store processedSheetMetalCounter("Sheet metal counter", C_SHEET_METAL_PALET);
 
 Queue emptyPalletQueue("emptyPalletQueue");
 
@@ -30,13 +33,19 @@ class MetalSheet : public Process {
     void Behavior() {
         //zabereme loading buffer
         this->Seize(pmLoadingBuffer);
+        this->Seize(pmPreWorker);
+        //cas nakladani do PM
+        this->Wait(Exponential(T_BUFFER));
         this->Release(pmLoadingBuffer);
+
+        //zabereme PM
+        this->Seize(pm);
 
         //vlozime plech do counteru
         processedSheetMetalCounter.Leave(1);
 
-        //zabereme PM
-        this->Seize(pm);
+        //uvonime pre workera
+        this->Release(pmPreWorker);
         this->Wait(Exponential(T_PM));
         this->Release(pm);
     }
@@ -44,16 +53,12 @@ class MetalSheet : public Process {
 
 
 class SheetMetalPallet : public Process {
-    int count;
-
-public:
-    SheetMetalPallet(Priority_t p, int count) : Process(p), count(count) {}
 
 private:
     void Behavior() {
         this->Seize(pmBuffer);
 
-        for (int i = 0; i < this->count; ++i) {
+        for (int i = 0; i < C_SHEET_METAL_PALET; ++i) {
             (new MetalSheet())->Activate();
         }
 
@@ -69,16 +74,35 @@ private:
 class SheetMetalPalletGenerator : public Event {
 public:
     double Interval;
+    bool did = false;
 
     SheetMetalPalletGenerator(double interv) : Event() {
         Interval = interv;
     };
 
     void Behavior() {
-        (new SheetMetalPallet(DEFAULT_PRIORITY, C_SHEET_METAL_PALET))->Activate();
+        //vybereme sklad, protoze ho potrebujeme prazdny
+
+        (new SheetMetalPallet())->Activate();
         Activate(Time + Exponential(Interval));
     }
 };
+
+class SimulationInit : public Event {
+public:
+    bool did = false;
+
+    void Behavior() {
+        //vybereme sklad, protoze ho potrebujeme prazdny
+        if (!did) {
+            processedSheetMetalCounter.Enter(this, C_SHEET_METAL_PALET);
+            did=true;
+        }
+
+        (new SheetMetalPalletGenerator(T_METAL_SHEET_GENERATOR))->Activate();
+    }
+};
+
 
 
 int main() {
@@ -88,21 +112,23 @@ int main() {
     //for (a=0; a<Sanitek; a++)
     //	Sanitka[a].SetQueue(&cekani);
 
-    Init(0, 1000);
+    Init(0, 10000);
 
-    (new SheetMetalPalletGenerator(12))->Activate();
+    (new SimulationInit())->Activate();
 
     Run();
-
-//    cekani.Output();
-    pm.Output();
-    pmQueue.Output();
 
     pmBuffer.Output();
     pmBufferQueue.Output();
 
     pmLoadingBuffer.Output();
     pmLoadingBufferQueue.Output();
+
+    pmPreWorker.Output();
+    pmPreQueue.Output();
+
+    pm.Output();
+    pmQueue.Output();
 
     processedSheetMetalCounter.Output();
     emptyPalletQueue.Output();
