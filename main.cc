@@ -3,9 +3,19 @@
 
 #define T_PM 10
 #define T_BUFFER 12
+#define T_L1_B 10
 #define T_METAL_SHEET_GENERATOR 300
+#define T_STACKER_CRANE 30
 
-#define C_SHEET_METAL_PALET 2
+
+//pocet plechu na palete
+#define C_SHEET_METAL_PALET 10
+
+//kapacity skladu pro jednotlive druhy palet
+#define C_SHEET_METAL_PALLET_STORE 10
+#define C_SKELETON_PALLET_STORE 10
+#define C_RESULT_PALLET_STORE 10
+#define C_EMPTY_PALLET_STORE 10
 
 Queue pmQueue("pmQueue");
 Facility pm("Punching machine", pmQueue);
@@ -22,21 +32,51 @@ Facility pmPreWorker("pmPreWorker", pmPreQueue);
 Queue separatorQueue("separatorQueue");
 Facility separator("separator", separatorQueue);
 
+//pomocne pocitatlo, ktere
 Store processedSheetMetalBufferCounter("processedSheetMetalBufferCounter", C_SHEET_METAL_PALET);
 
+//flag, ktery rika, jsou-li k dispozici prazdne palety pro nalozeni z PM
 Store hasPAndSPalet("hasPAndSPalet", 2);
+
+//flagy, je-li mozne privest dalsi paletu pro resulty a skeletony do Separatoru
 Store canLoadNextSkeletonPallet("canLoadNextSkeletonPallet", 1); //chceme defaultne 1!
 Store canLoadNextResultPallet("canLoadNextResultPallet", 1); //chceme defaultne 1!
 
+//zasobni resultu a skeletonu v Separatoru - vystup z punchign machine
 Store skeletonStack("skeletonStack", C_SHEET_METAL_PALET);
 Store resultStack("resultStack", C_SHEET_METAL_PALET);
 
-Queue emptyPalletQueue("emptyPalletQueue"); //todo: temp
+//sklady palet - v initu simulace se vyprazdni(sebere se jim vsechna kapacita)
+//nasledne se paletu do skladu plni
+//Leave uklada paletu do skladu, Enter ji vytahuje
+Store metalSheetPalletStore("metalSheetPalletStore", C_SHEET_METAL_PALLET_STORE);
+Store emptyPalletStore("emptyPalletStore", C_EMPTY_PALLET_STORE);
+Store skeletonPalletStore("skeletonPalletStore", C_SKELETON_PALLET_STORE);
+Store resultPalletStore("resultPalletStore", C_RESULT_PALLET_STORE);
+
+//stacker crane - obsluha skladu a linek
+Queue stackerCraneQueue("stackerCraneQueue");
+Facility stackerCrane("stackerCrane", stackerCraneQueue);
+
+//flag pro stacker crane, ma-li poslat plnou paletu s plechy do bufferu
+Store doSendNextMetalSheetPallet("doSendNextMetalSheetPallet", 1); //chceme defaultne 1
 
 class EmptyPallet : public Process {
     void Behavior() {
-        //todo: paleta nekam jde
-        emptyPalletQueue.Insert(this);
+        //jede z bufferu
+        this->Wait(T_L1_B);
+        //ceka na SC
+        this->Seize(stackerCrane);
+        //jede v SC a umistuje se do skladu
+        this->Wait(T_STACKER_CRANE);
+        //prazdna paleta se vlozi do skladu (Leave symbolizuje vraceni kapacity skladu)
+        this->Leave(emptyPalletStore);
+        //uvolnime SC
+        this->Release(stackerCrane);
+        //nastavime flag, ze muzeme poslat dalsi paletu s plechy
+        doSendNextMetalSheetPallet.Leave(1);
+
+        //RIP EMPTY PALET
     }
 };
 
@@ -48,7 +88,7 @@ private:
         //pokud je stack plny, vyprazdnime ho a muzeme odvest paletu
         if (skeletonStack.Empty()) {
             skeletonStack.Enter(this, C_SHEET_METAL_PALET);
-//            canLoadNextSkeletonPallet.Leave(1); //todo: odkomentovat az budou vstupy
+//            canLoadNextSkeletonPallet.Leave(1); //todo: odkomentovat az budou vstupy do separatoru
             //todo: paleta nekam musi jit
 
             //temp : nasimulujeme vytvoreni nove palety!!
@@ -92,8 +132,10 @@ class MetalSheet : public Process {
         //zabereme PM
         this->Seize(pm);
 
-        //vlozime plech do counteru bufferu
+        //vlozime plech do counteru bufferu - ve schematu nazvano Joiner
         processedSheetMetalBufferCounter.Leave(1);
+
+        //todo: seize POST PM workera?
 
         //uvonime pre workera
         this->Release(pmPreWorker);
@@ -124,8 +166,23 @@ class MetalSheetPallet : public Process {
 
 private:
     void Behavior() {
+        //vlozime paletu do skladu
+        this->Leave(metalSheetPalletStore);
+        //cekame, nez bude mozne poslat paletu na linky
+        this->Enter(doSendNextMetalSheetPallet);
+        //zabereme SC
+        this->Seize(stackerCrane);
+        //mame SC, jedeme
+        this->Wait(T_STACKER_CRANE);
+        //vratime SC
+        this->Release(stackerCrane);
+        //jedeme na lince do bufferu
+        this->Wait(T_L1_B);
+
+        //zabereme buffer pred SC
         this->Seize(pmBuffer);
 
+        //vyskladame plechy z palety
         for (int i = 0; i < C_SHEET_METAL_PALET; ++i) {
             (new MetalSheet())->Activate();
         }
@@ -133,52 +190,47 @@ private:
         //pockame, nez se zpracuji vsechny plechy
         processedSheetMetalBufferCounter.Enter(this, C_SHEET_METAL_PALET);
 
+        //vytvorime prazdnou paletu
         (new EmptyPallet())->Activate();
+        //opustime buffer
         this->Release(pmBuffer);
 
         return; //RIP paleta
     }
 };
 
-
+//todo: uz nebude nutny! aktualne naplanuje generovani palet s plechama
 class MetalSheetPalletGenerator : public Event {
 public:
     double Interval;
-    bool did = false;
 
     MetalSheetPalletGenerator(double interv) : Event() {
         Interval = interv;
     };
 
     void Behavior() {
-        //vybereme sklad, protoze ho potrebujeme prazdny
-
-        (new MetalSheetPallet())->Activate();
-        Activate(Time + Exponential(Interval));
+        for (int i = 0; i < C_SHEET_METAL_PALLET_STORE; ++i) {
+            (new MetalSheetPallet())->Activate(Time + Exponential(Interval) * (i));
+        }
     }
 };
 
 class SimulationInit : public Event {
 public:
-    bool did = false;
 
     void Behavior() {
-        if (!did) {
-            //vybereme sklady, protoze je potrebujeme prazdne
-            processedSheetMetalBufferCounter.Enter(this, C_SHEET_METAL_PALET);
-//            hasPAndSPalet.Enter(this, 2);
-            skeletonStack.Enter(this, C_SHEET_METAL_PALET);
-            resultStack.Enter(this, C_SHEET_METAL_PALET);
-            canLoadNextSkeletonPallet.Enter(this, 1);
-            canLoadNextResultPallet.Enter(this, 1);
+        //vybereme sklady, protoze je potrebujeme prazdne
+        processedSheetMetalBufferCounter.Enter(this, C_SHEET_METAL_PALET);
+        skeletonStack.Enter(this, C_SHEET_METAL_PALET);
+        resultStack.Enter(this, C_SHEET_METAL_PALET);
+        canLoadNextSkeletonPallet.Enter(this, 1);
+        canLoadNextResultPallet.Enter(this, 1);
 
-            //todo: tmp!
-//            (new SkeletonPallet())->Activate();
-//            (new ResultPallet())->Activate();
-
-
-            did = true;
-        }
+        //vyprazdnime sklady, protoze je naplnime jinak
+        metalSheetPalletStore.Enter(this, C_SHEET_METAL_PALLET_STORE);
+        emptyPalletStore.Enter(this, C_EMPTY_PALLET_STORE);
+        skeletonPalletStore.Enter(this, C_SKELETON_PALLET_STORE);
+        resultPalletStore.Enter(this, C_RESULT_PALLET_STORE);
 
         (new MetalSheetPalletGenerator(T_METAL_SHEET_GENERATOR))->Activate();
     }
@@ -208,7 +260,6 @@ int main() {
     pmQueue.Output();
 
     processedSheetMetalBufferCounter.Output();
-    emptyPalletQueue.Output();
 
     separator.Output();
     separatorQueue.Output();
@@ -218,4 +269,14 @@ int main() {
     canLoadNextResultPallet.Output();
     skeletonStack.Output();
     resultStack.Output();
+
+    stackerCrane.Output();
+    stackerCraneQueue.Output();
+
+    metalSheetPalletStore.Output();
+    emptyPalletStore.Output();
+    skeletonPalletStore.Output();
+    resultPalletStore.Output();
+
+    doSendNextMetalSheetPallet.Output();
 }
