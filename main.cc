@@ -3,7 +3,7 @@
 
 #define T_PM 10
 #define T_BUFFER 12
-#define T_METAL_SHEET_GENERATOR 300
+#define T_METAL_SHEET_GENERATOR 20
 
 //casy prevozu na lince
 #define T_L1_B 10
@@ -15,10 +15,10 @@
 
 #define C_SHEET_METAL_PALET 10
 //kapacity skladu pro jednotlive druhy palet
-#define C_SHEET_METAL_PALLET_STORE 10
-#define C_SKELETON_PALLET_STORE 10
-#define C_RESULT_PALLET_STORE 10
-#define C_EMPTY_PALLET_STORE 30 //soucet vsech palet v systemu
+#define C_SHEET_METAL_PALLET_STORE 200
+#define C_SKELETON_PALLET_STORE 200
+#define C_RESULT_PALLET_STORE 200
+#define C_EMPTY_PALLET_STORE  C_SHEET_METAL_PALLET_STORE + C_SKELETON_PALLET_STORE + C_RESULT_PALLET_STORE//soucet vsech palet v systemu
 
 Queue pmQueue("pmQueue");
 Facility pm("Punching machine", pmQueue);
@@ -63,6 +63,7 @@ Facility stackerCrane("stackerCrane", stackerCraneQueue);
 
 //flag pro stacker crane, ma-li poslat plnou paletu s plechy do bufferu
 Store doSendNextMetalSheetPallet("doSendNextMetalSheetPallet", 1); //chceme defaultne 1
+
 
 class EmptyMetalSheetPallet : public Process {
     void Behavior() {
@@ -180,7 +181,7 @@ private:
             //vratime SC
             this->Release(stackerCrane);
             //nastavime flag, ze je linka volna
-            this->Leave(canLoadNextSkeletonPallet);
+            this->Leave(canLoadNextResultPallet);
             //vlozime paletu do skladu
             this->Leave(resultPalletStore);
 
@@ -315,7 +316,7 @@ class MetalSheetPalletGenerator : public Event {
 public:
     void Behavior() {
         for (int i = 0; i < C_SHEET_METAL_PALLET_STORE; ++i) {
-            (new MetalSheetPallet(9))->Activate(Time + Exponential(T_METAL_SHEET_GENERATOR) * (i));
+            (new MetalSheetPallet(9))->Activate(Time + Exponential(T_METAL_SHEET_GENERATOR) + (i));
         }
     }
 };
@@ -350,7 +351,7 @@ public:
 int main() {
     SetOutput("main.dat");
 
-    Init(0, 10000);
+    Init(0, 100000);
 
     (new SimulationInit())->Activate();
 
