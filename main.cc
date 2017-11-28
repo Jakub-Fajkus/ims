@@ -152,6 +152,8 @@ private:
     void Behavior() {
         //cekame, nez bude potreba pradna paleta pro skeletony
         this->Enter(canLoadNextSkeletonPallet);
+        //vytahneme prazdnou paletu ze skladu
+        this->Enter(emptyPalletStore);
         //vytvorime prazdnou paletu pro skeletony
         (new EmptySkeletonPallet(5))->Activate();
 
@@ -222,6 +224,8 @@ private:
     void Behavior() {
         //cekame, nez bude potreba pradna paleta pro resulty
         this->Enter(canLoadNextResultPallet);
+        //vytahneme prazdnou paletu ze skladu
+        this->Enter(emptyPalletStore);
         //vytvorime prazdnou paletu pro resulty
         (new EmptyResultPallet(6))->Activate();
 
