@@ -13,6 +13,7 @@
 #define T_STACKER_CRANE 30
 //pocet plechu na palete
 
+#define C_ORDERS 1000
 #define C_SHEET_METAL_PALET 10
 //kapacity skladu pro jednotlive druhy palet
 #define C_SHEET_METAL_PALLET_STORE 200
@@ -64,6 +65,7 @@ Facility stackerCrane("stackerCrane", stackerCraneQueue);
 //flag pro stacker crane, ma-li poslat plnou paletu s plechy do bufferu
 Store doSendNextMetalSheetPallet("doSendNextMetalSheetPallet", 1); //chceme defaultne 1
 
+Store orders("orders", C_ORDERS);
 
 class EmptyMetalSheetPallet : public Process {
     void Behavior() {
@@ -315,39 +317,116 @@ private:
     }
 };
 
-//todo: uz nebude nutny! aktualne naplanuje generovani palet
-class MetalSheetPalletGenerator : public Event {
+class OrderGenerator : public Event {
 public:
     void Behavior() {
-        for (int i = 0; i < C_SHEET_METAL_PALLET_STORE; ++i) {
-            (new MetalSheetPallet(9))->Activate(Time + Exponential(T_METAL_SHEET_GENERATOR) + (i));
-        }
+        //vuytvorime objednavku
+        orders.Leave(1);
+        //naplanujeme dalsi vygenerovnai objednavky
+        this->Activate(Time + Exponential(4000));
     }
 };
 
+class HumanWorker : public Process {
+private:
+    //todo: odstranit pragmy!
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmissing-noreturn"
+    void Behavior() {
+        unsigned long palletCount;
+
+        while(true) {
+            //je-li nejaka objednavka
+            if (!orders.Full()) {
+                //nahodne vygenerujeme jeji parametry
+                //nejmensi objednavka je jedna paleta, nejvetsi je limitovana veliksoti skladu
+                unsigned long palletCount = (unsigned long) Uniform(1, C_RESULT_PALLET_STORE);
+                double orderDifficulty = Exponential(100);
+
+                //vezmeme ze skladu prazdne palety
+                this->Enter(emptyPalletStore, palletCount);
+
+                //zabereme SC
+                this->Seize(stackerCrane);
+
+                //toto nakladani nejakou chvili trva, priblizne cestu SC tam, zpet a nejaka rezie
+                this->Wait(palletCount * T_STACKER_CRANE * 3);
+
+                //vratime SC
+                this->Release(stackerCrane);
+
+                //vlozime do skladu palety s plechy
+                this->Leave(metalSheetPalletStore, palletCount);
+
+                //vytvorime do systemu palety s plechy
+                for (int i = 0; i < palletCount; ++i) {
+                    (new MetalSheetPallet(9))->Activate();
+                }
+            } //je-li nejaka objednavka
+
+            //pracovnik si jde neco vyridit
+            //nebo od stroje odvazi vysledky a skeletony
+            //nebo k nemu dovazi plechy pro dalsi zakazku
+            this->Wait(Exponential(30 * 60));
+
+            //jsou-li vsechny palety s vysledky jiz ve skladu
+            if (resultPalletStore.Used() == palletCount) {
+                //vybereme resulty ze skladu
+                this->Enter(resultPalletStore, palletCount);
+                //zabereme SC
+                this->Seize(stackerCrane);
+                //vykladame resulty
+                this->Wait(palletCount * Exponential(T_STACKER_CRANE * 3));
+                //vratime SC
+                this->Release(stackerCrane);
+                //vlozime prazdne palety
+                this->Leave(emptyPalletStore, palletCount);
+
+                //vybereme skeletony ze skladu
+                this->Enter(skeletonPalletStore, palletCount);
+                //zabereme SC
+                this->Seize(stackerCrane);
+                //vykladame skeletony
+                this->Wait(palletCount * Exponential(T_STACKER_CRANE * 3));
+                //vratime SC
+                this->Release(stackerCrane);
+                //vlozime prazdne palety
+                this->Leave(emptyPalletStore, palletCount);
+            }
+        }
+
+        //lide u nas neumiraji!
+    }
+#pragma clang diagnostic pop
+};
+
+
+
+
 class SimulationInit : public Event {
 public:
-
     void Behavior() {
         //vybereme sklady, protoze je potrebujeme prazdne
         processedSheetMetalBufferCounter.Enter(this, C_SHEET_METAL_PALET);
         skeletonStack.Enter(this, C_SHEET_METAL_PALET);
         resultStack.Enter(this, C_SHEET_METAL_PALET);
-
-        hasPAndSPalet.Enter(this, 2);
-//        canLoadNextSkeletonPallet.Enter(this, 1);
-//        canLoadNextResultPallet.Enter(this, 1);
-
-
-        //vyprazdnime sklady, protoze je naplnime jinak
-//        metalSheetPalletStore.Enter(this, C_SHEET_METAL_PALLET_STORE);
-//        emptyPalletStore.Enter(this, C_EMPTY_PALLET_STORE);
         skeletonPalletStore.Enter(this, C_SKELETON_PALLET_STORE);
         resultPalletStore.Enter(this, C_RESULT_PALLET_STORE);
+        metalSheetPalletStore.Enter(this, C_SHEET_METAL_PALLET_STORE);
 
-        (new MetalSheetPalletGenerator())->Activate();
+        //bybereme ze skladu objednavky
+        //kdyz prijde nova objednavka, volanim Leave se vlozi do skladu
+        orders.Enter(this, C_ORDERS);
+
+        hasPAndSPalet.Enter(this, 2);
+
         (new EmptyResultPalletWatcher())->Activate();
         (new EmptySkeletonPalletWatcher())->Activate();
+        (new OrderGenerator())->Activate();
+        //posleme delnika az za chvili, aby se stihlo vse inicializovat
+        (new HumanWorker())->Activate(1);
+
+        return; //RIP init
     }
 };
 
@@ -355,7 +434,7 @@ public:
 int main() {
     SetOutput("main.dat");
 
-    Init(0, 100000);
+    Init(0, 150000);
 
     (new SimulationInit())->Activate();
 
@@ -393,4 +472,5 @@ int main() {
     resultPalletStore.Output();
 
     doSendNextMetalSheetPallet.Output();
+    orders.Output();
 }
