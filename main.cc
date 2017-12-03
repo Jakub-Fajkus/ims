@@ -10,11 +10,15 @@
 #define T_L1_B 10
 #define T_L2_S 10
 
+#define MINUTE (60)
+#define HOUR (MINUTE * 60)
+#define DAY (HOUR * 24)
+
 
 #define T_STACKER_CRANE 30
 //pocet plechu na palete
 
-#define C_ORDERS 1000
+#define C_ORDERS 2000
 #define C_SHEET_METAL_PALET 10
 //kapacity skladu pro jednotlive druhy palet
 #define C_SHEET_METAL_PALLET_STORE 200
@@ -242,16 +246,29 @@ private:
     }
 };
 
-class MetalSheet : public Process {
+class MetalSheetPallet : public Process {
 public:
     int difficulty;
 
-    MetalSheet(Priority_t p, int difficulty) : Process(p), difficulty(difficulty) {}
+    MetalSheetPallet(Priority_t p, int difficulty) : Process(p), difficulty(difficulty) {}
+
+private:
+    void Behavior();
+};
+
+
+class MetalSheet : public Process {
+public:
+    int difficulty;
+    MetalSheetPallet *containingPallet;
+
+    MetalSheet(Priority_t p, int difficulty, MetalSheetPallet *containingPallet) : Process(p), difficulty(difficulty),
+                                                                                   containingPallet(containingPallet) {}
 
     void Behavior() {
         //zabereme loading buffer
         this->Seize(pmLoadingBuffer);
-        this->Seize(pmPreWorker);
+//        this->Seize(pmPreWorker);
         //cas nakladani do PM
         this->Wait(T_BUFFER);
         this->Release(pmLoadingBuffer);
@@ -262,22 +279,26 @@ public:
         //vlozime plech do counteru bufferu - ve schematu nazvano Joiner
         processedSheetMetalBufferCounter.Leave(1);
 
-        //todo: seize POST PM workera?
+        if (processedSheetMetalBufferCounter.Empty()) {
+            this->containingPallet->Activate();
+        }
 
         //uvonime pre workera
-        this->Release(pmPreWorker);
+//        this->Release(pmPreWorker);
         this->Wait(T_PM * this->difficulty);
         this->Release(pm);
 
         //zabereme post pm workera
-        this->Seize(pmPostWorker);
+//        this->Seize(pmPostWorker);
+
+        //pockame, az budeme mit k dispozici prazdne paletu pro resulty a skeletony
+        hasPAndSPalet.Enter(this, 2);
+
+        //vratime post pm workera
+//        this->Release(pmPostWorker);
 
         //zabereme separator
         this->Seize(separator);
-        //vratime post pm workera
-        this->Release(pmPostWorker);
-        //pockame, az budeme mit k dispozici prazdne paletu pro resulty a skeletony
-        hasPAndSPalet.Enter(this, 2);
 
         //vlozime resulty a skeletony do bufferu
         skeletonStack.Leave(1);
@@ -294,43 +315,41 @@ public:
 };
 
 
-class MetalSheetPallet : public Process {
-public:
-    int difficulty;
-    MetalSheetPallet(Priority_t p, int difficulty) : Process(p), difficulty(difficulty) {}
-
-private:
-    void Behavior() {
-        //vytahneme paletu ze skladu
-        this->Enter(metalSheetPalletStore);
-        //cekame, nez bude mozne poslat paletu na linky
-        this->Enter(doSendNextMetalSheetPallet);
-        //zabereme SC
-        this->Seize(stackerCrane);
-        //mame SC, jedeme
-        this->Wait(T_STACKER_CRANE);
-        //vratime SC
-        this->Release(stackerCrane);
-        //jedeme na lince do bufferu - uz bez SC
-        this->Wait(T_L1_B);
-        //zabereme buffer pred SC
-        this->Seize(pmBuffer);
-        //vyskladame plechy z palety
-        for (int i = 0; i < C_SHEET_METAL_PALET; ++i) {
-            (new MetalSheet(1, this->difficulty))->Activate();
-        }
-
-        //pockame, nez se zpracuji vsechny plechy
-        processedSheetMetalBufferCounter.Enter(this, C_SHEET_METAL_PALET);
-
-        //vytvorime prazdnou paletu
-        (new EmptyMetalSheetPallet(10))->Activate();
-        //opustime buffer
-        this->Release(pmBuffer);
-
-        return; //RIP paleta
+void MetalSheetPallet::Behavior() {
+    //vytahneme paletu ze skladu
+    this->Enter(metalSheetPalletStore);
+    //cekame, nez bude mozne poslat paletu na linky
+    this->Enter(doSendNextMetalSheetPallet);
+    //zabereme SC
+    this->Seize(stackerCrane);
+    //mame SC, jedeme
+    this->Wait(T_STACKER_CRANE);
+    //vratime SC
+    this->Release(stackerCrane);
+    //jedeme na lince do bufferu - uz bez SC
+    this->Wait(T_L1_B);
+    //zabereme buffer pred SC
+    this->Seize(pmBuffer);
+    //vyskladame plechy z palety
+    for (int i = 0; i < C_SHEET_METAL_PALET; ++i) {
+        (new MetalSheet(1, this->difficulty, this))->Activate();
     }
-};
+
+    //pasivujeme se a pockame, nez nas plech aktivuje
+    this->Passivate();
+    //zde mne plech aktivuje
+
+    //pockame, nez se zpracuji vsechny plechy
+    processedSheetMetalBufferCounter.Enter(this, C_SHEET_METAL_PALET);
+
+    //vytvorime prazdnou paletu
+    (new EmptyMetalSheetPallet(10))->Activate();
+    //opustime buffer
+    this->Release(pmBuffer);
+
+    return; //RIP paleta
+}
+
 
 class OrderGenerator : public Event {
 public:
@@ -338,7 +357,7 @@ public:
         //vuytvorime objednavku
         orders.Leave(1);
         //naplanujeme dalsi vygenerovnai objednavky
-        this->Activate(Time + Exponential(4000));
+        this->Activate(Time + Exponential(8*HOUR));
     }
 };
 
@@ -347,16 +366,19 @@ private:
     //todo: odstranit pragmy!
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wmissing-noreturn"
+
     void Behavior() {
         unsigned long palletCount;
+        bool isProcessingOrder = false;
 
-        while(true) {
+        while (true) {
             //je-li nejaka objednavka
-            if (!orders.Full()) {
+            if (!orders.Full() && !isProcessingOrder) {
+                isProcessingOrder = true;
                 //nahodne vygenerujeme jeji parametry
                 //nejmensi objednavka je jedna paleta, nejvetsi je limitovana veliksoti skladu
-                unsigned long palletCount = (unsigned long) Uniform(1, C_RESULT_PALLET_STORE);
-                int orderDifficulty = (int)Uniform(1,6);
+                unsigned long palletCount = (unsigned long) Uniform(1, C_RESULT_PALLET_STORE / 2);
+                int orderDifficulty = (int) Uniform(1, 6);
 
                 //vezmeme ze skladu prazdne palety
                 this->Enter(emptyPalletStore, palletCount);
@@ -382,7 +404,7 @@ private:
             //pracovnik si jde neco vyridit
             //nebo od stroje odvazi vysledky a skeletony
             //nebo k nemu dovazi plechy pro dalsi zakazku
-            this->Wait(Exponential(30 * 60));
+            this->Wait(Exponential(30 * MINUTE));
 
             //jsou-li vsechny palety s vysledky jiz ve skladu
             if (resultPalletStore.Used() == palletCount) {
@@ -407,15 +429,54 @@ private:
                 this->Release(stackerCrane);
                 //vlozime prazdne palety
                 this->Leave(emptyPalletStore, palletCount);
+
+                isProcessingOrder = false;
             }
         }
 
         //lide u nas neumiraji!
     }
+
 #pragma clang diagnostic pop
 };
 
 
+class Fault : public Process {
+public:
+    Facility &facility;
+    int failureTime;
+    int failureDuration;
+    int failureCount;
+
+    Fault(Priority_t p, Facility &facility, int failureTime, int failureDuration) : Process(p), facility(facility),
+                                                                                    failureTime(failureTime),
+                                                                                    failureDuration(failureDuration) {}
+
+private:
+    void Behavior() {
+        while (true) {
+            //naplanujeme poruchu
+            this->Wait(Exponential(this->failureTime));
+
+            //zazanemename poruchu
+            this->failureCount++;
+
+
+            //zabereme zarizeni
+            if (this->facility.Busy()) {
+                this->Seize(this->facility, 1);
+            } else {
+                this->Seize(this->facility);
+            }
+
+            //pockame n sekund
+            this->Wait(Exponential(failureDuration));
+
+            //vratime zarizeni
+            this->Release(this->facility);
+        }
+    }
+};
 
 
 class SimulationInit : public Event {
@@ -449,11 +510,32 @@ public:
 int main() {
     SetOutput("main.dat");
     srand(time(NULL));
-    RandomSeed(rand());
+    int random = rand();
 
-    Init(0, 150000);
+    RandomSeed(random);
+//    RandomSeed(2144570439);
+
+    _Print("random seeed: %d\n\n\n", random);
+
+    Init(0, 365 * DAY);
 
     (new SimulationInit())->Activate();
+
+    //porucha PM cca 90 dni
+    //opraveni potrva 24 hodin
+    Fault *pmFault = new Fault(15, pm, 90 * DAY, 24 * HOUR);
+    pmFault->Activate();
+
+    //porucha pm buffer cca 24 hodin
+    //opraveni potrva 20 minut
+    Fault *pmLoadingBufferFault = new Fault(15, pmLoadingBuffer, 24 * HOUR, 20 * MINUTE);
+    pmLoadingBufferFault->Activate();
+
+    //porucha pm buffer cca 8 hodin
+    //opraveni potrva 30 minut
+    Fault *separatorFault = new Fault(15, separator, 8 * HOUR, 30 * MINUTE);
+    separatorFault->Activate();
+
     Run();
 
     pmBuffer.Output();
@@ -489,4 +571,9 @@ int main() {
 
     doSendNextMetalSheetPallet.Output();
     orders.Output();
+
+
+    Print("Punching machine faults: %d\n", pmFault->failureCount);
+    Print("PM loading buffer faults: %d\n", pmLoadingBufferFault->failureCount);
+    Print("Separator faults: %d\n", separatorFault->failureCount);
 }
