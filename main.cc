@@ -2,21 +2,19 @@
 #include <simlib.h>
 #include <ctime>
 
-#define T_PM 10
-#define T_BUFFER 12
-#define T_METAL_SHEET_GENERATOR 20
-
-//casy prevozu na lince
-#define T_L1_B 10
-#define T_L2_S 10
-
 #define MINUTE (60)
 #define HOUR (MINUTE * 60)
 #define DAY (HOUR * 24)
 
+#define T_PM 1.5 * MINUTE
+#define T_BUFFER 5
+
+//casy prevozu na lince
+#define T_L1_B 20
+#define T_L2_S 15
 
 #define T_STACKER_CRANE 30
-//pocet plechu na palete
+#define T_SEPARATOR 2
 
 #define C_ORDERS 2000
 #define C_SHEET_METAL_PALET 10
@@ -268,7 +266,6 @@ public:
     void Behavior() {
         //zabereme loading buffer
         this->Seize(pmLoadingBuffer);
-//        this->Seize(pmPreWorker);
         //cas nakladani do PM
         this->Wait(T_BUFFER);
         this->Release(pmLoadingBuffer);
@@ -289,16 +286,17 @@ public:
         this->Release(pm);
 
         //zabereme post pm workera
-//        this->Seize(pmPostWorker);
 
         //pockame, az budeme mit k dispozici prazdne paletu pro resulty a skeletony
         hasPAndSPalet.Enter(this, 2);
 
         //vratime post pm workera
-//        this->Release(pmPostWorker);
 
         //zabereme separator
         this->Seize(separator);
+
+        //cekame na praci separatoru
+        this->Wait(T_SEPARATOR + (T_SEPARATOR * 2 * this->difficulty));
 
         //vlozime resulty a skeletony do bufferu
         skeletonStack.Leave(1);
@@ -386,8 +384,8 @@ private:
                 //zabereme SC
                 this->Seize(stackerCrane);
 
-                //toto nakladani nejakou chvili trva, priblizne cestu SC tam, zpet a nejaka rezie
-                this->Wait(palletCount * T_STACKER_CRANE * 3);
+                //toto nakladani nejakou chvili trva
+                this->Wait(palletCount * (T_STACKER_CRANE + 10));
 
                 //vratime SC
                 this->Release(stackerCrane);
@@ -413,7 +411,7 @@ private:
                 //zabereme SC
                 this->Seize(stackerCrane);
                 //vykladame resulty
-                this->Wait(palletCount * T_STACKER_CRANE * 3);
+                this->Wait(palletCount * (T_STACKER_CRANE + 10));
                 //vratime SC
                 this->Release(stackerCrane);
                 //vlozime prazdne palety
@@ -424,7 +422,7 @@ private:
                 //zabereme SC
                 this->Seize(stackerCrane);
                 //vykladame skeletony
-                this->Wait(palletCount * T_STACKER_CRANE * 3);
+                this->Wait(palletCount * (T_STACKER_CRANE + 10));
                 //vratime SC
                 this->Release(stackerCrane);
                 //vlozime prazdne palety
@@ -433,7 +431,6 @@ private:
                 isProcessingOrder = false;
             }
         }
-
         //lide u nas neumiraji!
     }
 
@@ -460,7 +457,6 @@ private:
 
             //zazanemename poruchu
             this->failureCount++;
-
 
             //zabereme zarizeni
             if (this->facility.Busy()) {
