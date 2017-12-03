@@ -24,6 +24,10 @@
 #define C_RESULT_PALLET_STORE 200
 #define C_EMPTY_PALLET_STORE  C_SHEET_METAL_PALLET_STORE + C_SKELETON_PALLET_STORE + C_RESULT_PALLET_STORE//soucet vsech palet v systemu
 
+Histogram delkaZpracovaniPlechu("Delka zpracovani plechu", 0, 40, 2000);
+Histogram pocetPaletVZakazce("Pocet palet v zakazce", 0, 2, 50);
+
+
 Queue pmQueue("pmQueue");
 Facility pm("Punching machine", pmQueue);
 
@@ -160,8 +164,6 @@ private:
     void Behavior() {
         //cekame, nez bude potreba pradna paleta pro skeletony
         this->Enter(canLoadNextSkeletonPallet);
-        //vytahneme prazdnou paletu ze skladu
-        this->Enter(emptyPalletStore);
         //vytvorime prazdnou paletu pro skeletony
         (new EmptySkeletonPallet(5))->Activate();
 
@@ -232,8 +234,6 @@ private:
     void Behavior() {
         //cekame, nez bude potreba pradna paleta pro resulty
         this->Enter(canLoadNextResultPallet);
-        //vytahneme prazdnou paletu ze skladu
-        this->Enter(emptyPalletStore);
         //vytvorime prazdnou paletu pro resulty
         (new EmptyResultPallet(6))->Activate();
 
@@ -259,11 +259,14 @@ class MetalSheet : public Process {
 public:
     int difficulty;
     MetalSheetPallet *containingPallet;
+    double processingTime;
 
     MetalSheet(Priority_t p, int difficulty, MetalSheetPallet *containingPallet) : Process(p), difficulty(difficulty),
                                                                                    containingPallet(containingPallet) {}
 
     void Behavior() {
+        double startTime = Time;
+
         //zabereme loading buffer
         this->Seize(pmLoadingBuffer);
         //cas nakladani do PM
@@ -307,6 +310,9 @@ public:
         (new ResultPallet(8))->Activate();
 
         this->Release(separator);
+
+        this->processingTime = Time - startTime;
+        delkaZpracovaniPlechu(this->processingTime);
 
         return;//RIP plech
     }
@@ -375,8 +381,10 @@ private:
                 isProcessingOrder = true;
                 //nahodne vygenerujeme jeji parametry
                 //nejmensi objednavka je jedna paleta, nejvetsi je limitovana veliksoti skladu
-                unsigned long palletCount = (unsigned long) Uniform(1, C_RESULT_PALLET_STORE / 2);
+                palletCount = (unsigned long) Uniform(1, C_RESULT_PALLET_STORE);
+//                palletCount = 10;
                 int orderDifficulty = (int) Uniform(1, 6);
+//                int orderDifficulty = 1;
 
                 //vezmeme ze skladu prazdne palety
                 this->Enter(emptyPalletStore, palletCount);
@@ -393,6 +401,8 @@ private:
                 //vlozime do skladu palety s plechy
                 this->Leave(metalSheetPalletStore, palletCount);
 
+                pocetPaletVZakazce(palletCount);
+
                 //vytvorime do systemu palety s plechy
                 for (int i = 0; i < palletCount; ++i) {
                     (new MetalSheetPallet(9, orderDifficulty))->Activate();
@@ -402,10 +412,10 @@ private:
             //pracovnik si jde neco vyridit
             //nebo od stroje odvazi vysledky a skeletony
             //nebo k nemu dovazi plechy pro dalsi zakazku
-            this->Wait(Exponential(30 * MINUTE));
+            this->Wait(Exponential(1 * MINUTE));
 
             //jsou-li vsechny palety s vysledky jiz ve skladu
-            if (resultPalletStore.Used() == palletCount) {
+            if (resultPalletStore.Used() == C_RESULT_PALLET_STORE - palletCount) {
                 //vybereme resulty ze skladu
                 this->Enter(resultPalletStore, palletCount);
                 //zabereme SC
@@ -520,19 +530,23 @@ int main() {
     //porucha PM cca 90 dni
     //opraveni potrva 24 hodin
     Fault *pmFault = new Fault(15, pm, 90 * DAY, 24 * HOUR);
-    pmFault->Activate();
+//    pmFault->Activate();
 
-    //porucha pm buffer cca 24 hodin
+    //porucha pm buffer cca 30 dni
     //opraveni potrva 20 minut
-    Fault *pmLoadingBufferFault = new Fault(15, pmLoadingBuffer, 24 * HOUR, 20 * MINUTE);
-    pmLoadingBufferFault->Activate();
+    Fault *pmLoadingBufferFault = new Fault(15, pmLoadingBuffer, 30 * DAY, 20 * MINUTE);
+//    pmLoadingBufferFault->Activate();
 
-    //porucha pm buffer cca 8 hodin
+    //porucha pm buffer cca 30 dni
     //opraveni potrva 30 minut
-    Fault *separatorFault = new Fault(15, separator, 8 * HOUR, 30 * MINUTE);
-    separatorFault->Activate();
+    Fault *separatorFault = new Fault(15, separator, 30 * DAY, 30 * MINUTE);
+//    separatorFault->Activate();
 
     Run();
+
+    Print("Punching machine faults: %d\n", pmFault->failureCount);
+    Print("PM loading buffer faults: %d\n", pmLoadingBufferFault->failureCount);
+    Print("Separator faults: %d\n", separatorFault->failureCount);
 
     pmBuffer.Output();
     pmBufferQueue.Output();
@@ -568,8 +582,7 @@ int main() {
     doSendNextMetalSheetPallet.Output();
     orders.Output();
 
+    pocetPaletVZakazce.Output();
+    delkaZpracovaniPlechu.Output();
 
-    Print("Punching machine faults: %d\n", pmFault->failureCount);
-    Print("PM loading buffer faults: %d\n", pmLoadingBufferFault->failureCount);
-    Print("Separator faults: %d\n", separatorFault->failureCount);
 }
