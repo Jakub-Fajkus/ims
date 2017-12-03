@@ -1,5 +1,6 @@
 
 #include <simlib.h>
+#include <ctime>
 
 #define T_PM 10
 #define T_BUFFER 12
@@ -32,6 +33,9 @@ Facility pmLoadingBuffer("pmLoadingBuffer", pmLoadingBufferQueue);
 
 Queue pmPreQueue("pmPreQueue");
 Facility pmPreWorker("pmPreWorker", pmPreQueue);
+
+Queue pmPostQueue("pmPostQueue");
+Facility pmPostWorker("pmPostWorker", pmPostQueue);
 
 Queue separatorQueue("separatorQueue");
 Facility separator("separator", separatorQueue);
@@ -239,6 +243,11 @@ private:
 };
 
 class MetalSheet : public Process {
+public:
+    int difficulty;
+
+    MetalSheet(Priority_t p, int difficulty) : Process(p), difficulty(difficulty) {}
+
     void Behavior() {
         //zabereme loading buffer
         this->Seize(pmLoadingBuffer);
@@ -257,11 +266,16 @@ class MetalSheet : public Process {
 
         //uvonime pre workera
         this->Release(pmPreWorker);
-        this->Wait(T_PM);
+        this->Wait(T_PM * this->difficulty);
         this->Release(pm);
+
+        //zabereme post pm workera
+        this->Seize(pmPostWorker);
 
         //zabereme separator
         this->Seize(separator);
+        //vratime post pm workera
+        this->Release(pmPostWorker);
         //pockame, az budeme mit k dispozici prazdne paletu pro resulty a skeletony
         hasPAndSPalet.Enter(this, 2);
 
@@ -282,7 +296,8 @@ class MetalSheet : public Process {
 
 class MetalSheetPallet : public Process {
 public:
-    MetalSheetPallet(Priority_t p) : Process(p) {}
+    int difficulty;
+    MetalSheetPallet(Priority_t p, int difficulty) : Process(p), difficulty(difficulty) {}
 
 private:
     void Behavior() {
@@ -302,7 +317,7 @@ private:
         this->Seize(pmBuffer);
         //vyskladame plechy z palety
         for (int i = 0; i < C_SHEET_METAL_PALET; ++i) {
-            (new MetalSheet())->Activate();
+            (new MetalSheet(1, this->difficulty))->Activate();
         }
 
         //pockame, nez se zpracuji vsechny plechy
@@ -341,7 +356,7 @@ private:
                 //nahodne vygenerujeme jeji parametry
                 //nejmensi objednavka je jedna paleta, nejvetsi je limitovana veliksoti skladu
                 unsigned long palletCount = (unsigned long) Uniform(1, C_RESULT_PALLET_STORE);
-                double orderDifficulty = Exponential(100);
+                int orderDifficulty = (int)Uniform(1,6);
 
                 //vezmeme ze skladu prazdne palety
                 this->Enter(emptyPalletStore, palletCount);
@@ -360,7 +375,7 @@ private:
 
                 //vytvorime do systemu palety s plechy
                 for (int i = 0; i < palletCount; ++i) {
-                    (new MetalSheetPallet(9))->Activate();
+                    (new MetalSheetPallet(9, orderDifficulty))->Activate();
                 }
             } //je-li nejaka objednavka
 
@@ -376,7 +391,7 @@ private:
                 //zabereme SC
                 this->Seize(stackerCrane);
                 //vykladame resulty
-                this->Wait(palletCount * Exponential(T_STACKER_CRANE * 3));
+                this->Wait(palletCount * T_STACKER_CRANE * 3);
                 //vratime SC
                 this->Release(stackerCrane);
                 //vlozime prazdne palety
@@ -387,7 +402,7 @@ private:
                 //zabereme SC
                 this->Seize(stackerCrane);
                 //vykladame skeletony
-                this->Wait(palletCount * Exponential(T_STACKER_CRANE * 3));
+                this->Wait(palletCount * T_STACKER_CRANE * 3);
                 //vratime SC
                 this->Release(stackerCrane);
                 //vlozime prazdne palety
@@ -433,11 +448,12 @@ public:
 
 int main() {
     SetOutput("main.dat");
+    srand(time(NULL));
+    RandomSeed(rand());
 
     Init(0, 150000);
 
     (new SimulationInit())->Activate();
-
     Run();
 
     pmBuffer.Output();
