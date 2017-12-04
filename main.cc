@@ -40,9 +40,6 @@ Facility pmLoadingBuffer("pmLoadingBuffer", pmLoadingBufferQueue);
 Queue pmPreQueue("pmPreQueue");
 Facility pmPreWorker("pmPreWorker", pmPreQueue);
 
-Queue pmPostQueue("pmPostQueue");
-Facility pmPostWorker("pmPostWorker", pmPostQueue);
-
 Queue separatorQueue("separatorQueue");
 Facility separator("separator", separatorQueue);
 
@@ -273,6 +270,9 @@ public:
         this->Wait(T_BUFFER);
         this->Release(pmLoadingBuffer);
 
+
+
+
         //zabereme PM
         this->Seize(pm);
 
@@ -284,7 +284,6 @@ public:
         }
 
         //uvonime pre workera
-//        this->Release(pmPreWorker);
         this->Wait(T_PM * this->difficulty);
         this->Release(pm);
 
@@ -292,8 +291,6 @@ public:
 
         //pockame, az budeme mit k dispozici prazdne paletu pro resulty a skeletony
         hasPAndSPalet.Enter(this, 2);
-
-        //vratime post pm workera
 
         //zabereme separator
         this->Seize(separator);
