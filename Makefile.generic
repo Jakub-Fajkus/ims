@@ -19,7 +19,7 @@ CXXFLAGS += -I$(SIMLIB_DIR)
 	$(CXX) $(CXXFLAGS) -o $@  $< $(SIMLIB_DIR)/simlib.so -lm
 
 # Models
-ALL_MODELS= main
+ALL_MODELS= main main2
 
 # Rules:
 all: $(ALL_MODELS)

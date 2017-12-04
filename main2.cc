@@ -28,31 +28,23 @@ Histogram delkaZpracovaniPlechu("Delka zpracovani plechu", 0, 40, 2000);
 Histogram pocetPaletVZakazce("Pocet palet v zakazce", 0, 2, 50);
 
 Queue beforePmWorkerQueue("beforePmWorkerQueue");
-Facility beforePmWorker("beforePmWorker");
+Facility beforePmWorker("beforePmWorker", beforePmWorkerQueue);
 
 Queue afterPmWorkerQueue("afterPmWorkerQueue");
-Facility afterPmWorker("afterPmWorker");
+Facility afterPmWorker("afterPmWorker", afterPmWorkerQueue);
 
 Queue pm1Queue("pm1Queue");
-Facility pm1("Punching machine", pm1Queue);
+Facility pm1("Punching machine 1", pm1Queue);
 
-Queue pm1BufferQueue("pm1BufferQueue");
-Facility pm1Buffer("pm1Buffer", pm1BufferQueue);
+Queue pmBufferQueue("pmBufferQueue");
+Facility pmBuffer("pmBuffer", pmBufferQueue);
 
-Queue pm1LoadingBufferQueue("pm1LoadingBufferQueue");
-Facility pm1LoadingBuffer("pm1LoadingBuffer", pm1LoadingBufferQueue);
+Queue pmLoadingBufferQueue("pmLoadingBufferQueue");
+Facility pmLoadingBuffer("pmLoadingBuffer", pmLoadingBufferQueue);
 
 
 Queue pm2Queue("pm2Queue");
-Facility pm2("Punching machine", pm2Queue);
-
-Queue pm2BufferQueue("pm2BufferQueue");
-Facility pm2Buffer("pm2Buffer", pm2BufferQueue);
-
-Queue pm2LoadingBufferQueue("pm2LoadingBufferQueue");
-Facility pm2LoadingBuffer("pm2LoadingBuffer", pm2LoadingBufferQueue);
-
-
+Facility pm2("Punching machine 2", pm2Queue);
 
 
 Queue separatorQueue("separatorQueue");
@@ -113,7 +105,6 @@ public:
     }
 };
 
-//todo: nastavit prioritu procesu pro palety!!!!
 
 class SkeletonPallet : public Process {
 public:
@@ -280,30 +271,58 @@ public:
         double startTime = Time;
 
         //zabereme loading buffer
-        this->Seize(pm1LoadingBuffer);
+        this->Seize(pmLoadingBuffer);
         //cas nakladani do PM
         this->Wait(T_BUFFER);
-        this->Release(pm1LoadingBuffer);
+        this->Release(pmLoadingBuffer);
 
+        //zabereme workera, ktery rozdeluje plechy mezi 2 PM
+        this->Seize(beforePmWorker);
 
-        if ()
+        //todo: wait!
+        this->Wait(10);
 
+        //vybereme, kterou PM zabereme
+        Facility *usedPm;
+        if (!pm1.Busy()) {
+            usedPm = pm1;
+        } else {
+            usedPm = pm2;
+        }
 
-        //zabereme PM
-        this->Seize(pm1);
+        //zabereme vybranou PM
+        this->Seize(*usedPm);
+
+        //vratime workera na prerozdelovani
+        this->Release(beforePmWorker);
 
         //vlozime plech do counteru bufferu - ve schematu nazvano Joiner
         processedSheetMetalBufferCounter.Leave(1);
 
+        //poud je to poslendi plech, aktivujeme paletu, na kter prijel
         if (processedSheetMetalBufferCounter.Empty()) {
             this->containingPallet->Activate();
         }
 
-        //uvonime pre workera
+        //palime plechy v PM
         this->Wait(T_PM * this->difficulty);
-        this->Release(pm1);
 
-        //zabereme post pm1 workera
+        //vratime PM
+        this->Release(*usedPm);
+
+        //zabereme workera, ktery sklada vysledky z obou PM
+        this->Seize(afterPmWorker);
+
+        //todo: wait
+        this->Wait(10);
+
+
+
+        //vratime workera
+        this->Release(afterPmWorker);
+
+
+        //###################### CAST V SEPARATORU #####################################################################
 
         //pockame, az budeme mit k dispozici prazdne paletu pro resulty a skeletony
         hasPAndSPalet.Enter(this, 2);
@@ -346,7 +365,7 @@ void MetalSheetPallet::Behavior() {
     //jedeme na lince do bufferu - uz bez SC
     this->Wait(T_L1_B);
     //zabereme buffer pred SC
-    this->Seize(pm1Buffer);
+    this->Seize(pmBuffer);
     //vyskladame plechy z palety
     for (int i = 0; i < C_SHEET_METAL_PALET; ++i) {
         (new MetalSheet(1, this->difficulty, this))->Activate();
@@ -362,7 +381,7 @@ void MetalSheetPallet::Behavior() {
     //vytvorime prazdnou paletu
     (new EmptyMetalSheetPallet(10))->Activate();
     //opustime buffer
-    this->Release(pm1Buffer);
+    this->Release(pmBuffer);
 
     return; //RIP paleta
 }
@@ -547,8 +566,8 @@ int main() {
 
     //porucha pm1 buffer cca 30 dni
     //opraveni potrva 20 minut
-    Fault *pm1LoadingBufferFault = new Fault(15, pm1LoadingBuffer, 30 * DAY, 20 * MINUTE);
-//    pm1LoadingBufferFault->Activate();
+    Fault *pmLoadingBufferFault = new Fault(15, pmLoadingBuffer, 30 * DAY, 20 * MINUTE);
+//    pmLoadingBufferFault->Activate();
 
     //porucha pm1 buffer cca 30 dni
     //opraveni potrva 30 minut
@@ -558,23 +577,23 @@ int main() {
     Run();
 
     Print("Punching machine faults: %d\n", pm1Fault->failureCount);
-    Print("PM loading buffer faults: %d\n", pm1LoadingBufferFault->failureCount);
+    Print("PM loading buffer faults: %d\n", pmLoadingBufferFault->failureCount);
     Print("Separator faults: %d\n", separatorFault->failureCount);
 
-    pm1Buffer.Output();
-    pm1BufferQueue.Output();
+    beforePmWorkerQueue.Output();
+    beforePmWorker.Output();
+    afterPmWorkerQueue.Output();
+    afterPmWorker.Output();
 
-    pm1LoadingBuffer.Output();
-    pm1LoadingBufferQueue.Output();
+
+    pmBuffer.Output();
+    pmBufferQueue.Output();
+
+    pmLoadingBuffer.Output();
+    pmLoadingBufferQueue.Output();
 
     pm1.Output();
     pm1Queue.Output();
-
-    pm2Buffer.Output();
-    pm2BufferQueue.Output();
-
-    pm2LoadingBuffer.Output();
-    pm2LoadingBufferQueue.Output();
 
     pm2.Output();
     pm2Queue.Output();

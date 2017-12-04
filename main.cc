@@ -95,7 +95,6 @@ public:
     }
 };
 
-//todo: nastavit prioritu procesu pro palety!!!!
 
 class SkeletonPallet : public Process {
 public:
@@ -267,9 +266,6 @@ public:
         this->Wait(T_BUFFER);
         this->Release(pmLoadingBuffer);
 
-
-
-
         //zabereme PM
         this->Seize(pm);
 
@@ -361,10 +357,6 @@ public:
 
 class HumanWorker : public Process {
 private:
-    //todo: odstranit pragmy!
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wmissing-noreturn"
-
     void Behavior() {
         unsigned long palletCount;
         bool isProcessingOrder = false;
@@ -437,8 +429,6 @@ private:
         }
         //lide u nas neumiraji!
     }
-
-#pragma clang diagnostic pop
 };
 
 
@@ -517,7 +507,7 @@ int main() {
 
     _Print("random seeed: %d\n\n\n", random);
 
-    Init(0, 365 * DAY);
+    Init(0, 40 * 365 * DAY);
 
     (new SimulationInit())->Activate();
 
